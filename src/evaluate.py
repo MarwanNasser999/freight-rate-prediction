@@ -35,20 +35,28 @@ def time_split(df, test_start, test_end):
     return train.reset_index(drop=True), test.reset_index(drop=True)
 
 
-def evaluate(predict_fn, fold=MAIN_FOLD):
+def evaluate(predict_fn, fold=MAIN_FOLD, drop_train_outliers=True):
     """Train on the past, score on the fold's test period.
 
     predict_fn(train_df, test_df) -> predictions for test_df.
-    Training always uses clean rows. We score on clean test rows (main number)
-    and on all test rows including corrupted prices (what Spotter may see).
+    Training uses clean rows (unless drop_train_outliers=False, for comparison).
+    We score on clean test rows (main number) and on all test rows including
+    corrupted prices (what Spotter may see).
     """
-    raw_train, raw_val, _ = load_raw()
-    all_rows, _, _ = prepare_data(raw_train, raw_val, drop_outliers=False, verbose=False)
-    all_rows["is_outlier"] = find_rate_outliers(all_rows)
-
+    raw_train, _, _ = load_raw()
     name, start, end = fold
-    train, test = time_split(all_rows, start, end)
-    train = train[~train["is_outlier"]].reset_index(drop=True)
+
+    # 1) Split FIRST, so every statistic below is learned from the past only.
+    raw_tr, raw_te = time_split(raw_train, start, end)
+    # 2) Clean inputs: median weight comes from raw_tr; the daily market level uses
+    #    market_index of both periods (an input we are given, never a price).
+    train, test, _ = prepare_data(raw_tr, raw_te, drop_outliers=False, verbose=False)
+    # 3) Outlier rule built from training prices only, then applied to both.
+    train["is_outlier"] = find_rate_outliers(train)
+    test["is_outlier"] = find_rate_outliers(test, reference=train)
+
+    if drop_train_outliers:
+        train = train[~train["is_outlier"]].reset_index(drop=True)
 
     preds = np.asarray(predict_fn(train, test))
     clean = ~test["is_outlier"].to_numpy()

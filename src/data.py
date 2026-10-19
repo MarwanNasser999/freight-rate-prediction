@@ -53,13 +53,24 @@ def clean_inputs(df, weight_fill, daily_mi):
     return df
 
 
-def find_rate_outliers(train):
-    """Return True for training rows whose price looks corrupted."""
-    rpm = train["posted_rate"] / train["distance"]
-    distance_bin = pd.qcut(train["distance"], N_DISTANCE_BINS)
-    typical = rpm.groupby([train["equipment"], distance_bin], observed=True).transform("median")
-    ratio = rpm / typical
-    return (ratio < OUTLIER_LOW) | (ratio > OUTLIER_HIGH)
+def find_rate_outliers(df, reference=None):
+    """Return True for rows of `df` whose price looks corrupted.
+
+    The "typical rate" for each (equipment, distance group) is learned from
+    `reference` (default: df itself). In validation we pass the training rows
+    as reference, so test-period prices are never used to build the rule.
+    """
+    reference = df if reference is None else reference
+    ref_rpm = reference["posted_rate"] / reference["distance"]
+    edges = np.quantile(reference["distance"], np.linspace(0, 1, N_DISTANCE_BINS + 1))
+    edges[0], edges[-1] = 0, np.inf  # make the outer groups catch any distance
+    typical = ref_rpm.groupby(
+        [reference["equipment"], pd.cut(reference["distance"], edges)], observed=True
+    ).median()
+
+    keys = pd.MultiIndex.from_arrays([df["equipment"], pd.cut(df["distance"], edges)])
+    ratio = (df["posted_rate"] / df["distance"]).to_numpy() / typical.reindex(keys).to_numpy()
+    return pd.Series((ratio < OUTLIER_LOW) | (ratio > OUTLIER_HIGH), index=df.index)
 
 
 def prepare_data(train, val, dec=None, drop_outliers=True, verbose=True):
